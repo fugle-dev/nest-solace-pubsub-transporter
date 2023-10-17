@@ -2,7 +2,7 @@
 
 [![NPM version][npm-image]][npm-url]
 
-> A Nest microservice transporter for Solace PubSub+
+> A Nest microservice transporter for [Solace PubSub+](https://www.solace.dev/)
 
 ## Installation
 
@@ -12,32 +12,28 @@ To begin using it, we first install the required dependency.
 $ npm install --save nest-solace-pubsub-transporter solclientjs
 ```
 
-## Getting started
+## Overview
 
-To instantiate a microservice, use the `createMicroservice()` method of the `NestFactory` class:
+To use the Solace PubSub+ transporter, pass the following options object with a `strategy` property using `SolacePubSubServer` to the `createMicroservice()` method:
 
 ```typescript
-import { NestFactory } from '@nestjs/core';
-import { Transport, MicroserviceOptions } from '@nestjs/microservices';
-import { SolacePubSubServer } from 'nest-solace-pubsub-transporter';
-import { AppModule } from './app.module';
 
-async function bootstrap() {
-  const app = await NestFactory.createMicroservice<MicroserviceOptions>(
-    AppModule,
-    {
-      strategy: new SolacePubSubServer({
-        url: 'tcp://localhost:55554',
-        vpnName: 'default',
-        userName: 'admin',
-        password: 'admin',
-      }),
-    },
-  );
-  await app.listen();
-}
-bootstrap();
+const app = await NestFactory.createMicroservice<MicroserviceOptions>(
+  AppModule,
+  {
+    strategy: new SolacePubSubServer({
+      url: 'tcp://localhost:55554',
+      vpnName: 'default',
+      userName: 'admin',
+      password: 'admin',
+    }),
+  },
+);
 ```
+
+## Options
+
+The `SolacePubSubServer` constructor options object is based on `solace.SessionProperties`. The Solace PubSub+ transporter exposes the properties described [here](https://docs.solace.com/API-Developer-Online-Ref-Documentation/nodejs/solace.SessionProperties.html).
 
 ## Client
 
@@ -59,6 +55,17 @@ To dispatch an event (instead of sending a message), use the `emit()` method:
 
 ```typescript
 solacePubSubClient.emit('event', 'Hello world!');
+```
+
+## Context
+
+In more sophisticated scenarios, you may want to access more information about the incoming request. When using the Solace PubSub+ transporter, you can access the `SolacePubSubContext` object.
+
+```typescript
+@MessagePattern('notifications')
+getNotifications(@Payload() data: number[], @Ctx() context: SolacePubSubContext) {
+  console.log(`Message: ${context.getMessage()}`);
+}
 ```
 
 ## Example

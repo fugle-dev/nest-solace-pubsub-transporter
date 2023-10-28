@@ -1,4 +1,4 @@
-import { Message, MessageDeliveryModeType, Session, SessionEventCode, SessionEvent, SolclientFactory } from 'solclientjs';
+import { MessageDeliveryModeType, Session, SessionEventCode, SessionEvent, SolclientFactory } from 'solclientjs';
 import { Logger } from '@nestjs/common/services/logger.service';
 import { loadPackage } from '@nestjs/common/utils/load-package.util';
 import { ClientProxy, ReadPacket, WritePacket } from '@nestjs/microservices';
@@ -31,14 +31,6 @@ export class SolacePubSubClient extends ClientProxy {
     this.initializeDeserializer(options);
   }
 
-  public getRequestPattern(pattern: string): string {
-    return pattern;
-  }
-
-  public getResponsePattern(pattern: string): string {
-    return `${pattern}/reply`;
-  }
-
   public close() {
     this.session && this.session.disconnect();
     this.session = null;
@@ -54,11 +46,10 @@ export class SolacePubSubClient extends ClientProxy {
       try {
         this.session = this.createSession();
         this.handleError(this.session);
-        this.session.on(SessionEventCode.MESSAGE, this.createResponseCallback());
         this.session.on(SessionEventCode.UP_NOTICE, (sessionEvent: SessionEvent) => {
           resolve(sessionEvent);
         });
-      } catch(err) {
+      } catch (err) {
         reject(err);
       }
     });
@@ -85,34 +76,9 @@ export class SolacePubSubClient extends ClientProxy {
   }
 
   public handleError(session: Session) {
-    session.addListener(
-      SessionEventCode.DOWN_ERROR as any,
-      (err: any) => this.logger.error(err),
+    session.addListener(SessionEventCode.DOWN_ERROR as any, (err: any) =>
+      this.logger.error(err),
     );
-  }
-
-  public createResponseCallback(): (message: Message) => any {
-    return async (message: Message) => {
-      const packet = JSON.parse(message.getBinaryAttachment() as string);
-      const { err, response, isDisposed, id } =
-        await this.deserializer.deserialize(packet);
-
-      const callback = this.routingMap.get(id);
-      if (!callback) {
-        return undefined;
-      }
-      if (isDisposed || err) {
-        return callback({
-          err,
-          response,
-          isDisposed: true,
-        });
-      }
-      callback({
-        err,
-        response,
-      });
-    };
   }
 
   protected publish(
@@ -124,40 +90,45 @@ export class SolacePubSubClient extends ClientProxy {
       const pattern = this.normalizePattern(partialPacket.pattern);
       const serializedPacket = this.serializer.serialize(packet);
 
-      const responseChannel = this.getResponsePattern(pattern);
-      let subscriptionsCount =
-        this.subscriptionsCount.get(responseChannel) || 0;
+      const message = SolclientFactory.createMessage();
+      message.setDestination(SolclientFactory.createTopicDestination(pattern));
+      message.setBinaryAttachment(JSON.stringify(serializedPacket));
+      message.setDeliveryMode(MessageDeliveryModeType.DIRECT);
 
-      const publishPacket = () => {
-        subscriptionsCount = this.subscriptionsCount.get(responseChannel) || 0;
-        this.subscriptionsCount.set(responseChannel, subscriptionsCount + 1);
-        this.routingMap.set(packet.id, callback);
+      this.routingMap.set(packet.id, callback);
+      this.session.sendRequest(
+        message,
+        null,
+        async (session, message) => {
+          const packet = JSON.parse(message.getBinaryAttachment() as string);
+          const { err, response, isDisposed, id } =
+            await this.deserializer.deserialize(packet);
 
-        const message = SolclientFactory.createMessage();
-        message.setDestination(SolclientFactory.createTopicDestination(pattern));
-        message.setBinaryAttachment(JSON.stringify(serializedPacket));
-        message.setDeliveryMode(MessageDeliveryModeType.DIRECT);
-        this.session.send(message);
-      };
+          const callback = this.routingMap.get(id);
+          if (!callback) {
+            return undefined;
+          }
+          if (isDisposed || err) {
+            return callback({
+              err,
+              response,
+              isDisposed: true,
+            });
+          }
+          callback({
+            err,
+            response,
+          });
+        },
+        (session, event) => {
+          callback({ err: event });
+        },
+        null,
+      );
 
-      if (subscriptionsCount <= 0) {
-        this.session.subscribe(
-          SolclientFactory.createTopicDestination(responseChannel),
-          true,
-          responseChannel,
-          10000,
-        );
-        publishPacket();
-      } else {
-        publishPacket();
-      }
-
-      return () => {
-        this.unsubscribeFromChannel(responseChannel);
-        this.routingMap.delete(packet.id);
-      };
+      return () => this.routingMap.delete(packet.id);
     } catch (err) {
-      callback({ err });
+      return callback({ err });
     }
   }
 
@@ -178,19 +149,5 @@ export class SolacePubSubClient extends ClientProxy {
         reject(err);
       }
     });
-  }
-
-  protected unsubscribeFromChannel(channel: string) {
-    const subscriptionCount = this.subscriptionsCount.get(channel);
-    this.subscriptionsCount.set(channel, subscriptionCount - 1);
-
-    if (subscriptionCount - 1 <= 0) {
-      this.session.unsubscribe(
-        SolclientFactory.createTopicDestination(channel),
-        true,
-        channel,
-        10000,
-      );
-    }
   }
 }

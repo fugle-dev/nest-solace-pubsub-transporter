@@ -1,7 +1,7 @@
-import { Message, MessageDeliveryModeType, Session, SessionEventCode, SolclientFactory } from 'solclientjs';
+import { Message, Session, SessionEventCode, SolclientFactory } from 'solclientjs';
 import { isUndefined } from '@nestjs/common/utils/shared.utils';
 import { NO_MESSAGE_HANDLER } from '@nestjs/microservices/constants';
-import { CustomTransportStrategy, IncomingRequest, MessageHandler, PacketId, ReadPacket, Server } from '@nestjs/microservices';
+import { CustomTransportStrategy, IncomingRequest, PacketId, ReadPacket, Server } from '@nestjs/microservices';
 import { SolacePubSubOptions } from './solace-pubsub-options.interface';
 import { SolacePubSubContext } from './solace-pubsub.context';
 
@@ -50,13 +50,11 @@ export class SolacePubSubServer extends Server implements CustomTransportStrateg
     session.on(SessionEventCode.MESSAGE, this.getMessageHandler(session).bind(this));
     const registeredPatterns = [...this.messageHandlers.keys()];
     registeredPatterns.forEach(pattern => {
-      const { isEventHandler } = this.messageHandlers.get(pattern);
-      const topicName = isEventHandler ? pattern : this.getRequestPattern(pattern);
       this.session.subscribe(
-        SolclientFactory.createTopicDestination(topicName),
+        SolclientFactory.createTopicDestination(pattern),
         true,
-        topicName,
-        10000,
+        pattern,
+        null,
       );
     });
   }
@@ -71,16 +69,11 @@ export class SolacePubSubServer extends Server implements CustomTransportStrateg
     return session;
   }
 
-  public getMessageHandler(pub: Session): Function {
-    return async (
-      message: Message,
-    ) => this.handleMessage(message, pub);
+  public getMessageHandler(session: Session): Function {
+    return async (message: Message) => this.handleMessage(message, session);
   }
 
-  public async handleMessage(
-    message: Message,
-    pub: Session,
-  ): Promise<any> {
+  public async handleMessage(message: Message, session: Session): Promise<any> {
     const pattern = message.getDestination().name;
     const rawPacket = this.parseMessage(message.getBinaryAttachment());
     const packet = await this.deserializer.deserialize(rawPacket);
@@ -88,13 +81,8 @@ export class SolacePubSubServer extends Server implements CustomTransportStrateg
     if (isUndefined((packet as IncomingRequest).id)) {
       return this.handleEvent(pattern, packet, context);
     }
-    const publish = this.getPublisher(
-      pub,
-      pattern,
-      (packet as IncomingRequest).id,
-    );
+    const reply = this.getReplier(message, session, (packet as IncomingRequest).id);
     const handler = this.getHandlerByPattern(pattern);
-
     if (!handler) {
       const status = 'error';
       const noHandlerPacket = {
@@ -102,25 +90,21 @@ export class SolacePubSubServer extends Server implements CustomTransportStrateg
         status,
         err: NO_MESSAGE_HANDLER,
       };
-      return publish(noHandlerPacket);
+      return reply(noHandlerPacket);
     }
     const response$ = this.transformToObservable(
       await handler(packet.data, context),
     );
-    response$ && this.send(response$, publish);
+    response$ && this.send(response$, reply);
   }
 
-  public getPublisher(session: Session, pattern: any, id: string): any {
+  public getReplier(message: Message, session: Session, id: string): any {
     return (response: any) => {
       Object.assign(response, { id });
       const outgoingResponse = this.serializer.serialize(response);
-
-      const message = SolclientFactory.createMessage();
-      message.setDestination(SolclientFactory.createTopicDestination(this.getReplyPattern(pattern)));
-      message.setBinaryAttachment(JSON.stringify(outgoingResponse));
-      message.setDeliveryMode(MessageDeliveryModeType.DIRECT);
-
-      return session.send(message);
+      const reply = SolclientFactory.createMessage();
+      reply.setBinaryAttachment(JSON.stringify(outgoingResponse));
+      return session.sendReply(message, reply);
     };
   }
 
@@ -130,14 +114,6 @@ export class SolacePubSubServer extends Server implements CustomTransportStrateg
     } catch (e) {
       return content;
     }
-  }
-
-  public getRequestPattern(pattern: string): string {
-    return pattern;
-  }
-
-  public getReplyPattern(pattern: string): string {
-    return `${pattern}/reply`;
   }
 
   public handleError(session: any) {

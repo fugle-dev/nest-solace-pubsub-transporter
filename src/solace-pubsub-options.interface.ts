@@ -1,3 +1,3 @@
 import * as solace from 'solclientjs';
 
-export type SolacePubSubOptions = solace.SessionProperties;
+export interface SolacePubSubOptions extends solace.SessionProperties {}

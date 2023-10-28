@@ -1,9 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
-import {
-  ClientProxy,
-  MessagePattern,
-  EventPattern,
-} from '@nestjs/microservices';
+import { ClientProxy, MessagePattern } from '@nestjs/microservices';
 import { SolacePubSubClient } from 'nest-solace-pubsub-transporter';
 import { Observable } from 'rxjs';
 
@@ -20,28 +16,15 @@ export class MathController {
     });
   }
 
-  @Get('send')
-  send(): Observable<number> {
+  @Get()
+  execute(): Observable<number> {
     const pattern = { cmd: 'sum' };
     const data = [1, 2, 3, 4, 5];
     return this.client.send<number>(pattern, data);
   }
 
-  @Get('emit')
-  emit(): Observable<number> {
-    const pattern = { cmd: 'sum' };
-    const data = [1, 2, 3, 4, 5];
-    return this.client.emit<number>(pattern, data);
-  }
-
   @MessagePattern({ cmd: 'sum' })
-  messageHandler(data: number[]): number {
-    console.log(data);
+  sum(data: number[]): number {
     return (data || []).reduce((a, b) => a + b);
-  }
-
-  @EventPattern({ cmd: 'sum' })
-  eventHandler(data: number[]) {
-    console.log(data);
   }
 }
